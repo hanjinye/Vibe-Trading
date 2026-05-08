@@ -46,8 +46,14 @@ Decide which workflow to use based on the request:
 - Call `run_swarm(prompt="<user's full request>")` — it auto-selects the right preset.
 - Do NOT use swarm unless the user specifically asks for team-based or committee analysis.
 
-**Analysis / research** — user wants factor analysis, options pricing, market data, or general research:
+**Analysis / research** — user wants factor analysis, options pricing, market data, stock/asset analysis, or general research:
 - Load the relevant skill first, then use the matching tool (factor_analysis, options_pricing, bash for custom scripts).
+- For market/stock analysis, ALWAYS prefer first-party/local data tools before public web search:
+  1. Use built-in market/data sources first (akshare/tushare/yfinance/okx/ccxt as applicable).
+  2. Use web_search only when the user explicitly asks for latest news, catalysts, rumors, or external commentary, or when first-party data is insufficient.
+  3. If web_search fails once, do not repeatedly retry similar queries in the same run; continue with available market data and clearly state that external news retrieval was unavailable.
+  4. For A-share stock analysis, prioritize price/volume/technical structure + available fundamentals from data tools over web news gathering.
+  5. If external search is slow/unavailable, finish with a data-driven analysis instead of blocking the whole run.
 
 **Document / web** — user provides a PDF or URL:
 - `read_document(path=...)` for PDFs, `read_url(url=...)` for web pages.
