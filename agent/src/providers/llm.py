@@ -38,10 +38,20 @@ if ChatOpenAI is not None:
                 msg.additional_kwargs["reasoning_content"] = value
 
         def _create_chat_result(self, response, generation_info=None):  # type: ignore[override]
+            # Handle edge case where response is a string (non-standard API)
+            if isinstance(response, str):
+                from langchain_core.messages import AIMessage
+                from langchain_core.outputs import ChatResult, ChatGeneration
+                return ChatResult(
+                    generations=[ChatGeneration(message=AIMessage(content=response))]
+                )
             result = super()._create_chat_result(response, generation_info)
-            raw = response if isinstance(response, dict) else response.model_dump()
-            for gen, choice in zip(result.generations, raw["choices"]):
-                self._capture(choice["message"], gen.message)
+            try:
+                raw = response if isinstance(response, dict) else response.model_dump()
+                for gen, choice in zip(result.generations, raw["choices"]):
+                    self._capture(choice["message"], gen.message)
+            except (AttributeError, KeyError, TypeError):
+                pass  # Non-standard response, skip reasoning capture
             return result
 
         def _convert_chunk_to_generation_chunk(  # type: ignore[override]
