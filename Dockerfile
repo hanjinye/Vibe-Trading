@@ -14,6 +14,10 @@ RUN npm run build
 # ============================================================================
 FROM python:3.11-slim AS runtime
 
+# Deployment-local acceleration for mainland China network
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
 LABEL org.opencontainers.image.title="Vibe-Trading" \
     org.opencontainers.image.description="Natural-language finance research AI agent with backtesting" \
     org.opencontainers.image.version="0.1.7" \
@@ -23,7 +27,8 @@ LABEL org.opencontainers.image.title="Vibe-Trading" \
 WORKDIR /app
 
 # System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
