@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Loader2, ArrowDown, CheckCircle2, Square, Download, Plus, Paperclip, X, Users } from "lucide-react";
+import { Send, Loader2, ArrowDown, CheckCircle2, Square, Download, Paperclip, X, Users, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
@@ -37,6 +37,18 @@ function groupMessages(msgs: AgentMessage[]): MsgGroup[] {
 
 const act = () => useAgentStore.getState();
 
+type UploadAttachment = {
+  id: string;
+  filename: string;
+  filePath: string;
+  previewUrl?: string;
+  isImage: boolean;
+};
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|gif|bmp|webp|tiff)$/i.test(file.name);
+}
+
 /* ---------- Component ---------- */
 export function Agent() {
   const [input, setInput] = useState("");
@@ -49,10 +61,8 @@ export function Agent() {
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const lastEventRef = useRef(0);
 
-  const [attachment, setAttachment] = useState<{ filename: string; filePath: string } | null>(null);
+  const [attachments, setAttachments] = useState<UploadAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [showUploadMenu, setShowUploadMenu] = useState(false);
-  const uploadMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [swarmPreset, setSwarmPreset] = useState<{ name: string; title: string } | null>(null);
   const swarmCancelRef = useRef(false);
@@ -96,6 +106,25 @@ export function Agent() {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
     });
   }, []);
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((prev) => {
+      for (const item of prev) {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      }
+      return [];
+    });
+  }, []);
+
+  const removeAttachmentAt = useCallback((index: number) => {
+    setAttachments((prev) => {
+      const item = prev[index];
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  useEffect(() => () => clearAttachments(), [clearAttachments]);
 
   /* Track scroll position to show/hide scroll button */
   useEffect(() => {
@@ -504,9 +533,12 @@ export function Agent() {
       finalPrompt = `[Swarm Team Mode] Use the swarm tool to assemble the best specialist team for this task. Auto-select the most appropriate preset.\n\n${prompt}`;
     }
 
-    if (attachment) {
-      finalPrompt = `[Uploaded file: ${attachment.filename}, path: ${attachment.filePath}]\n\n${finalPrompt}`;
-      setAttachment(null);
+    if (attachments.length > 0) {
+      const attachmentBlock = attachments
+        .map((item) => `[Uploaded file: ${item.filename}, path: ${item.filePath}]`)
+        .join("\n");
+      finalPrompt = `${attachmentBlock}\n\n${finalPrompt}`;
+      clearAttachments();
     }
     setInput("");
     act().addMessage({ id: "", type: "user", content: finalPrompt, timestamp: Date.now() });
@@ -594,47 +626,50 @@ export function Agent() {
   };
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    if (files.length === 0) return;
     const blockedExts = [
       ".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".app", ".dmg",
       ".so", ".dll", ".dylib",
       ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz",
     ];
-    const lowered = file.name.toLowerCase();
-    if (blockedExts.some((ext) => lowered.endsWith(ext))) {
-      toast.error("Executables and archives are not allowed");
-      return;
-    }
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("File size exceeds 50 MB limit");
-      return;
-    }
     setUploading(true);
-    setShowUploadMenu(false);
     try {
-      const result = await api.uploadFile(file);
-      setAttachment({ filename: result.filename, filePath: result.file_path });
-      toast.success(`Uploaded: ${result.filename}`);
+      let uploadedCount = 0;
+      for (const file of files) {
+        const lowered = file.name.toLowerCase();
+        if (blockedExts.some((ext) => lowered.endsWith(ext))) {
+          toast.error(`Blocked file type: ${file.name}`);
+          continue;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+          toast.error(`File too large: ${file.name}`);
+          continue;
+        }
+        const previewUrl = isImageFile(file) ? URL.createObjectURL(file) : undefined;
+        const result = await api.uploadFile(file);
+        uploadedCount += 1;
+        setAttachments((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            filename: result.filename,
+            filePath: result.file_path,
+            previewUrl,
+            isImage: !!previewUrl,
+          },
+        ]);
+      }
+      if (uploadedCount > 0) {
+        toast.success(`Uploaded ${uploadedCount} file${uploadedCount > 1 ? "s" : ""}`);
+      }
     } catch (err) {
       toast.error(`Upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setUploading(false);
     }
   }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (uploadMenuRef.current && !uploadMenuRef.current.contains(e.target as Node)) {
-        setShowUploadMenu(false);
-      }
-    };
-    if (showUploadMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showUploadMenu]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
@@ -741,16 +776,48 @@ export function Agent() {
               </span>
             </div>
           )}
-          {/* Attachment badge */}
-          {attachment && (
-            <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
-                <Paperclip className="h-3 w-3" />
-                {attachment.filename}
-                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive transition-colors">
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
+          {/* Attachment badges */}
+          {attachments.length > 0 && (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {attachments.map((attachment, index) => (
+                <div
+                  key={attachment.id}
+                  className="overflow-hidden rounded-2xl border bg-card shadow-sm"
+                >
+                  {attachment.previewUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => window.open(attachment.previewUrl, "_blank", "noopener,noreferrer")}
+                      className="block w-full bg-muted/30"
+                      title="Open image preview"
+                    >
+                      <img
+                        src={attachment.previewUrl}
+                        alt={attachment.filename}
+                        className="h-32 w-full object-cover"
+                      />
+                    </button>
+                  ) : (
+                    <div className="flex h-32 items-center justify-center bg-muted/30">
+                      <Paperclip className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{attachment.filename}</div>
+                      <div className="text-xs text-muted-foreground">{attachment.isImage ? "图片" : "文件"}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachmentAt(index)}
+                      className="rounded-full p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+                      aria-label={`Remove ${attachment.filename}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
           {/* Uploading indicator */}
@@ -761,47 +828,33 @@ export function Agent() {
             </div>
           )}
           <div className="flex gap-2 items-end">
-            {/* "+" menu: PDF upload + Swarm presets */}
-            <div className="relative" ref={uploadMenuRef}>
-              <button
-                type="button"
-                onClick={() => setShowUploadMenu(prev => !prev)}
-                disabled={status === "streaming" || uploading}
-                className="w-9 h-9 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
-                title="More options"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-              {showUploadMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
-                  <button
-                    type="button"
-                    onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                    Upload PDF document
-                  </button>
-                  <div className="border-t my-1" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowUploadMenu(false);
-                      setSwarmPreset({ name: "auto", title: "Agent Swarm" });
-                      inputRef.current?.focus();
-                    }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  >
-                    <Users className="h-4 w-4" />
-                    Agent Swarm
-                  </button>
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={status === "streaming" || uploading}
+              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+            >
+              <Upload className="h-4 w-4" />
+              上传文件/图片
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSwarmPreset({ name: "auto", title: "Agent Swarm" });
+                inputRef.current?.focus();
+              }}
+              disabled={status === "streaming" || uploading}
+              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-xl border bg-background px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              title="启用 Swarm"
+            >
+              <Users className="h-4 w-4" />
+              Swarm
+            </button>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.docx,.xlsx,.xls,.pptx,.csv,.tsv,.txt,.md,.log,.json,.yaml,.yml,.toml,.html,.xml,.rst,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff"
+              multiple
+              accept=".pdf,.docx,.xlsx,.xls,.pptx,.csv,.tsv,.txt,.md,.log,.json,.yaml,.yml,.toml,.html,.xml,.rst,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tiff,image/*"
               onChange={handleFileSelect}
               className="hidden"
             />
@@ -847,7 +900,7 @@ export function Agent() {
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim() && !attachment}
+                disabled={!input.trim() && attachments.length === 0}
                 className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
               >
                 <Send className="h-4 w-4" />
